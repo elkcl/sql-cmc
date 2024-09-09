@@ -8,6 +8,6 @@
   postgresql = pinned.postgresql_11;
 in
   pkgs.mkShell {
-    nativeBuildInputs = [postgresql pkgs.pgadmin4];
+    nativeBuildInputs = [postgresql];
   }
 
