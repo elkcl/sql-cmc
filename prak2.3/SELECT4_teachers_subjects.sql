@@ -8,6 +8,12 @@ SELECT teachers.teacher_id AS "id",
 FROM teachers
      JOIN teachings USING (teacher_id)
 	 JOIN subjects  USING (subject_id)
-GROUP BY "id", last_name, first_name, patronym
+GROUP BY "id",
+         last_name,
+		 first_name,
+		 patronym
 HAVING count(*) > 1
-ORDER BY subj_cnt DESC, last_name, first_name, patronym;
+ORDER BY subj_cnt DESC,
+         last_name,
+		 first_name,
+		 patronym;

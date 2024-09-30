@@ -3,7 +3,7 @@
 UPDATE majors
 SET "degree" = next_degree("degree")
 WHERE department_id = 5 AND duration >= 5
--- AND degree < 'кандидат'
+AND degree < 'кандидат'
 ;
 
 SELECT *
