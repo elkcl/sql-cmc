@@ -4,7 +4,6 @@ CREATE SCHEMA public;
 CREATE TYPE degree_t AS ENUM ('бакалавр', 'магистр', 'кандидат', 'доктор');
 CREATE TYPE tuition_t AS ENUM ('бюджет', 'контракт');
 
-DROP FUNCTION IF EXISTS next_degree;
 CREATE FUNCTION next_degree(degree_t) RETURNS degree_t AS
 $$
 SELECT *
@@ -80,6 +79,203 @@ CREATE TABLE enrollments (
 	tuition_type tuition_t NOT NULL,
 	UNIQUE (student_id, group_id)
 );
+
+CREATE FUNCTION enroll_check() RETURNS trigger AS $enroll_check$
+    DECLARE
+	    mentor_degree degree_t;
+		my_degree degree_t;
+		my_major integer;
+		my_free_places integer;
+		my_paid_places integer;
+		curr_free integer;
+		curr_paid integer;
+    BEGIN
+		mentor_degree := (
+		    SELECT teachers.degree 
+		    FROM teachers
+			WHERE teachers.teacher_id = NEW.mentor_id
+		);
+		my_degree := (
+		    SELECT majors.degree 
+			FROM majors
+			JOIN "groups" ON "groups".major_id = majors.major_id AND "groups".group_id = NEW.group_id
+		);
+		IF my_degree >= mentor_degree THEN
+		    RAISE EXCEPTION 'mentor''s degree must be higher than the student''s';
+		END IF;
+
+        SELECT majors.free_places, majors.paid_places
+		INTO my_free_places, my_paid_places
+		FROM majors
+		JOIN "groups" ON "groups".major_id = majors.major_id AND "groups".group_id = NEW.group_id;
+
+        my_major := (
+            SELECT "groups".major_id
+			FROM "groups"
+			WHERE "groups".group_id = NEW.group_id
+		);
+
+		curr_free := (
+            SELECT count(*)
+			FROM enrollments
+			JOIN "groups" ON "groups".group_id = enrollments.group_id AND "groups".major_id = my_major
+			WHERE enrollments.tuition_type = 'бюджет'
+		);
+		curr_paid := (
+            SELECT count(*)
+			FROM enrollments
+			JOIN "groups" ON "groups".group_id = enrollments.group_id AND "groups".major_id = my_major
+			WHERE enrollments.tuition_type = 'контракт'
+		);
+
+		IF NEW.tuition_type = 'бюджет' THEN
+		    curr_free := curr_free + 1;
+		END IF;
+		IF NEW.tuition_type = 'контракт' THEN
+		    curr_paid := curr_paid + 1;
+		END IF;
+		IF OLD IS NOT NULL THEN
+            IF OLD.tuition_type = 'бюджет' THEN
+		        curr_free := curr_free - 1;
+		    END IF;
+		    IF OLD.tuition_type = 'контракт' THEN
+		        curr_paid := curr_paid - 1;
+		    END IF;
+		END IF;
+
+		IF curr_free > my_free_places THEN
+		    RAISE EXCEPTION 'not enough free places in a major';
+		END IF;
+		IF curr_paid > my_paid_places THEN
+		    RAISE EXCEPTION 'not enough paid places in a major';
+		END IF;
+		
+        RETURN NEW;
+    END;
+$enroll_check$ LANGUAGE plpgsql;
+
+CREATE TRIGGER enroll_check 
+BEFORE INSERT OR UPDATE OF mentor_id, group_id, tuition_type
+ON enrollments
+FOR EACH ROW EXECUTE FUNCTION enroll_check();
+
+CREATE FUNCTION mentor_check() RETURNS trigger AS $mentor_check$
+    BEGIN
+	    IF EXISTS (
+		    SELECT
+		    FROM enrollments
+		         JOIN "groups" USING (group_id)
+			     JOIN majors USING (major_id)
+		    WHERE enrollments.mentor_id = NEW.teacher_id AND majors.degree >= NEW.degree
+		) THEN
+		    RAISE EXCEPTION 'mentor''s degree must be higher than the student''s';
+		END IF;
+        RETURN NEW;
+    END;
+$mentor_check$ LANGUAGE plpgsql;
+
+CREATE TRIGGER mentor_check 
+BEFORE UPDATE OF "degree"
+ON teachers
+FOR EACH ROW EXECUTE FUNCTION mentor_check();
+
+CREATE FUNCTION group_check() RETURNS trigger AS $group_check$
+    DECLARE
+		my_degree degree_t;
+		my_free_places integer;
+		my_paid_places integer;
+		curr_free integer;
+		curr_paid integer;
+    BEGIN
+        SELECT majors.free_places, majors.paid_places
+		INTO my_free_places, my_paid_places
+		FROM majors
+		WHERE majors.major_id = NEW.major_id;
+		curr_free := (
+            SELECT count(*)
+			FROM enrollments
+			WHERE enrollments.group_id = NEW.group_id AND enrollments.tuition_type = 'бюджет'
+		);
+		curr_paid := (
+            SELECT count(*)
+			FROM enrollments
+			WHERE enrollments.group_id = NEW.group_id AND enrollments.tuition_type = 'контракт'
+		);
+		IF curr_free > my_free_places THEN
+		    RAISE EXCEPTION 'not enough free places in a major';
+		END IF;
+		IF curr_paid > my_paid_places THEN
+		    RAISE EXCEPTION 'not enough paid places in a major';
+		END IF;
+
+		my_degree := (
+            SELECT majors.degree
+			FROM majors
+			WHERE majors.major_id = NEW.major_id
+		);
+		IF EXISTS (
+		    SELECT
+		    FROM enrollments
+			     JOIN teachers ON teachers.teacher_id = enrollments.mentor_id
+			                      AND enrollments.group_id = NEW.group_id
+		    WHERE my_degree >= teachers.degree
+		) THEN
+		    RAISE EXCEPTION 'mentor''s degree must be higher than the student''s';
+		END IF;
+		
+        RETURN NEW;
+    END;
+$group_check$ LANGUAGE plpgsql;
+
+CREATE TRIGGER group_check 
+BEFORE UPDATE OF major_id
+ON "groups"
+FOR EACH ROW EXECUTE FUNCTION group_check();
+
+CREATE FUNCTION major_check() RETURNS trigger AS $major_check$
+    DECLARE
+		curr_free integer;
+		curr_paid integer;
+    BEGIN
+        curr_free := (
+            SELECT count(*)
+			FROM enrollments
+			JOIN "groups" ON "groups".group_id = enrollments.group_id
+			                 AND "groups".major_id = NEW.major_id
+ 			                 AND enrollments.tuition_type = 'бюджет'
+		);
+		curr_paid := (
+            SELECT count(*)
+			FROM enrollments
+			JOIN "groups" ON "groups".group_id = enrollments.group_id
+			                 AND "groups".major_id = NEW.major_id
+ 			                 AND enrollments.tuition_type = 'контракт'
+		);
+		IF curr_free > NEW.free_places THEN
+		    RAISE EXCEPTION 'not enough free places in a major';
+		END IF;
+		IF curr_paid > NEW.paid_places THEN
+		    RAISE EXCEPTION 'not enough paid places in a major';
+		END IF;
+		IF EXISTS (
+		    SELECT
+		    FROM "groups"
+		         JOIN enrollments ON enrollments.group_id = "groups".group_id
+			                      AND "groups".major_id = NEW.major_id
+			     JOIN teachers ON teachers.teacher_id = enrollments.mentor_id
+		                          AND NEW.degree >= teachers.degree
+		) THEN
+		    RAISE EXCEPTION 'mentor''s degree must be higher than the student''s';
+		END IF;
+		
+        RETURN NEW;
+    END;
+$major_check$ LANGUAGE plpgsql;
+
+CREATE TRIGGER major_check 
+BEFORE UPDATE OF free_places, paid_places, "degree"
+ON majors
+FOR EACH ROW EXECUTE FUNCTION major_check();
 
 INSERT INTO departments VALUES (DEFAULT, 'ШВТ', 'Лапшин Родион Петрович');
 INSERT INTO departments VALUES (DEFAULT, 'ЗПБ', 'Седова Мария Сергеевна');
