@@ -1,0 +1,6 @@
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+UPDATE majors
+SET free_places = free_places + 10
+WHERE major_id = 1
+RETURNING *;
+COMMIT;
